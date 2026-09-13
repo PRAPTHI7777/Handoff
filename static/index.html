@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Handoff</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel">
+        <h1>Handoff</h1>
+        <p class="lede">Give a goal. The agent browses, acts, and asks you only when it must.</p>
+        <form id="start-form">
+          <label>
+            Goal
+            <textarea id="goal" required rows="4" placeholder="Register me for this event using the page I provide."></textarea>
+          </label>
+          <label>
+            Start URL (optional)
+            <input id="start-url" type="url" placeholder="https://example.com" />
+          </label>
+          <div class="row">
+            <label>Name <input id="name" autocomplete="name" /></label>
+            <label>Email <input id="email" type="email" autocomplete="email" /></label>
+            <label>Phone <input id="phone" autocomplete="tel" /></label>
+          </div>
+          <button type="submit" id="start-btn">Start task</button>
+        </form>
+        <p id="meta" class="meta"></p>
+        <div id="gate" class="gate hidden"></div>
+      </section>
+      <section class="panel">
+        <h2>Live view</h2>
+        <img id="shot" alt="Current page screenshot" class="shot hidden" />
+        <ol id="log" class="log"></ol>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
