@@ -134,3 +134,15 @@ class CompleteArgs(BaseModel):
 
 class FailArgs(BaseModel):
     reason: str = Field(min_length=1, max_length=4000)
+
+
+class SaveMemoryArgs(BaseModel):
+    memory: str = Field(min_length=1, max_length=500)
+
+
+class RetrieveMemoryArgs(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+
+
+class DeleteMemoryArgs(BaseModel):
+    memory_id: str = Field(min_length=1, max_length=100)

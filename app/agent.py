@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -16,6 +17,7 @@ from app.llm import (
     truncate_obs,
     user_text_content,
 )
+from app.memory import MemoryStore, MemoryStoreError
 from app.prompts import (
     SYSTEM_PROMPT,
     build_execution_state,
@@ -24,7 +26,10 @@ from app.prompts import (
 )
 from app.schemas import (
     Observation,
+    DeleteMemoryArgs,
+    RetrieveMemoryArgs,
     ResumeRequest,
+    SaveMemoryArgs,
     TaskCreate,
     TaskStatus,
     ToolResult,
@@ -33,6 +38,7 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 
 MAX_IDENTICAL_FAILURES = 2
+MEMORY_TOOLS = {"save_memory", "retrieve_memory", "delete_memory"}
 
 
 ACTIVE_STATUSES = {
@@ -72,6 +78,7 @@ class AgentTask:
         self.recent_actions: List[str] = []
         self.failed_actions: Dict[str, int] = {}
         self._plan_page = ""
+        self.relevant_memories: List[Dict[str, str]] = []
 
     def emit(self, event: Dict[str, Any]) -> None:
         event = {
@@ -88,6 +95,7 @@ class TaskManager:
         self.tasks: Dict[str, AgentTask] = {}
         self._playwright: Optional[Playwright] = None
         self._llm: Optional[GroqToolClient] = None
+        self._memory_store = MemoryStore(settings.memory_file)
 
     def attach(self, playwright: Playwright) -> None:
         self._playwright = playwright
@@ -211,6 +219,8 @@ class TaskManager:
                 task.profile.phone,
             )
 
+            task.relevant_memories = self._relevant_memories(task.goal)
+
             initial_message = (
                 build_user_task_message(
                     task.goal,
@@ -247,6 +257,7 @@ class TaskManager:
                             task.plan,
                             task.current_observation,
                             task.recent_actions,
+                            [item["value"] for item in task.relevant_memories],
                         ),
                     )
 
@@ -284,6 +295,21 @@ class TaskManager:
                 tool_call_id = (
                     model_content["tool_calls"][0]["id"]
                 )
+
+                memory_response = self._run_memory_tool(
+                    task,
+                    name,
+                    args,
+                )
+                if memory_response is not None:
+                    contents.append(
+                        function_response_content(
+                            name,
+                            memory_response,
+                            tool_call_id,
+                        )
+                    )
+                    continue
 
                 signature = _tool_signature(name, args)
                 if task.failed_actions.get(signature, 0) >= MAX_IDENTICAL_FAILURES:
@@ -510,6 +536,103 @@ class TaskManager:
         )
 
         return result
+
+    def _relevant_memories(
+        self,
+        query: str,
+    ) -> List[Dict[str, str]]:
+        try:
+            return self._memory_store.relevant(query)
+        except MemoryStoreError:
+            logger.exception("Could not retrieve local memories")
+            return []
+
+    def _run_memory_tool(
+        self,
+        task: AgentTask,
+        name: str,
+        raw_args: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if name not in MEMORY_TOOLS:
+            return None
+
+        try:
+            if name == "save_memory":
+                args = SaveMemoryArgs.model_validate(raw_args)
+                if not _explicit_memory_request(
+                    task.goal,
+                    {"remember", "save", "store"},
+                ):
+                    return {
+                        "ok": False,
+                        "error": (
+                            "Memory was not saved: the current user did not "
+                            "explicitly ask Handoff to remember it."
+                        ),
+                    }
+                item = self._memory_store.save(args.memory)
+                self._add_relevant_memory(task, item)
+                task.recent_actions.append("save_memory -> saved explicit memory")
+                task.emit(
+                    {
+                        "type": "memory",
+                        "action": "saved",
+                        "memory_id": item["id"],
+                    }
+                )
+                return {"ok": True, "memory": _memory_view(item)}
+
+            if name == "retrieve_memory":
+                args = RetrieveMemoryArgs.model_validate(raw_args)
+                memories = self._relevant_memories(args.query)
+                for item in memories:
+                    self._add_relevant_memory(task, item)
+                task.recent_actions.append(
+                    "retrieve_memory -> " + str(len(memories)) + " relevant memories"
+                )
+                return {
+                    "ok": True,
+                    "memories": [_memory_view(item) for item in memories],
+                }
+
+            args = DeleteMemoryArgs.model_validate(raw_args)
+            if not _explicit_memory_request(
+                task.goal,
+                {"forget", "delete", "remove"},
+            ):
+                return {
+                    "ok": False,
+                    "error": (
+                        "Memory was not deleted: the current user did not "
+                        "explicitly ask Handoff to forget it."
+                    ),
+                }
+            deleted = self._memory_store.delete(args.memory_id)
+            if deleted:
+                task.relevant_memories = [
+                    item for item in task.relevant_memories
+                    if item["id"] != args.memory_id
+                ]
+                task.recent_actions.append("delete_memory -> deleted explicit memory")
+                task.emit(
+                    {
+                        "type": "memory",
+                        "action": "deleted",
+                        "memory_id": args.memory_id,
+                    }
+                )
+            return {"ok": deleted, "memory_id": args.memory_id}
+        except (MemoryStoreError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @staticmethod
+    def _add_relevant_memory(
+        task: AgentTask,
+        item: Dict[str, str],
+    ) -> None:
+        if not any(existing["id"] == item["id"] for existing in task.relevant_memories):
+            task.relevant_memories.append(item)
+            task.relevant_memories = task.relevant_memories[-3:]
 
     async def _pause(
         self,
@@ -797,6 +920,25 @@ class TaskManager:
                 }
             )
 
+
+
+
+def _memory_view(item: Dict[str, str]) -> Dict[str, str]:
+    """Return the safe public representation of a stored memory."""
+    return {
+        "id": item["id"],
+        "value": item["value"],
+        "created_at": item["created_at"],
+    }
+
+
+def _explicit_memory_request(
+    goal: str,
+    keywords: set[str],
+) -> bool:
+    """Return True only when the user's goal explicitly requests a memory action."""
+    normalized = goal.lower().strip()
+    return any(keyword in normalized for keyword in keywords)
 
 def _safe_args(
     name: str,

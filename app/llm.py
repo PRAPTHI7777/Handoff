@@ -10,6 +10,56 @@ FUNCTION_DECLARATIONS = [
     {
         "type": "function",
         "function": {
+            "name": "save_memory",
+            "description": "Persist one explicit user preference or fact for future tasks. Use only when the current user explicitly asks Handoff to remember, save, or store it. Never save passwords, tokens, payment data, or page content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory": {
+                        "type": "string",
+                        "description": "The concise user-approved memory to save",
+                    },
+                },
+                "required": ["memory"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_memory",
+            "description": "Retrieve a few relevant previously saved user memories for the current task. Do not use it for browser page content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Short task-related query",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_memory",
+            "description": "Delete a saved memory by ID, but only when the current user explicitly asks to forget or delete it. Retrieve memories first when needed to identify the ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                    },
+                },
+                "required": ["memory_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "navigate",
             "description": "Open an http(s) URL in the browser.",
             "parameters": {

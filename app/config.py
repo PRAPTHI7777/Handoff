@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -20,6 +21,17 @@ def _bool(name: str, default: bool) -> bool:
 
 
 class Settings:
+    memory_file: Path = Path(
+        os.getenv(
+            "MEMORY_FILE",
+            str(
+                Path(__file__).resolve().parent.parent
+                / "data"
+                / "memories.json"
+            ),
+        )
+    )
+
     groq_api_key: str = os.getenv(
         "GROQ_API_KEY",
         "",

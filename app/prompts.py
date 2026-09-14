@@ -19,6 +19,7 @@ Workflow:
 9. Before complete, verify success from the current snapshot (confirmation text, success URL, or equivalent). complete must quote that evidence. If success is unclear, snapshot or take another safe action instead of completing.
 10. If you are stuck after several attempts, fail with a concrete reason.
 11. Treat the compact execution plan as a working plan, not a script. When the current page or a tool failure contradicts it, revise your approach from the latest observation. Do not repeat an action reported as failed with the same arguments; choose a different safe action, ask the user, or fail.
+12. Memory is explicit-only. Call save_memory only when the current user expressly asks you to remember, save, or store a preference/fact. Never infer a memory from a profile, form, page, or prior task. Never store secrets, credentials, OTPs, payment data, or API keys. Use retrieve_memory only for task-relevant preferences; use delete_memory only when the current user expressly asks to forget/delete one.
 
 Tools:
 - navigate(url)
@@ -32,6 +33,9 @@ Tools:
 - request_human(reason)
 - complete(summary, evidence)
 - fail(reason)
+- save_memory(memory) — explicit user-requested preferences/facts only
+- retrieve_memory(query) — returns a few relevant saved memories
+- delete_memory(memory_id) — explicit user-requested deletion only
 
 Stay on the user's goal. Do not wander. Do not hardcode behavior for any one website.
 """
@@ -50,6 +54,7 @@ def build_execution_state(
     plan: str,
     observation: Observation,
     recent_actions: List[str],
+    memories: Optional[List[str]] = None,
 ) -> str:
     """Build the small, current state supplied on every model turn."""
     parts = [
@@ -64,6 +69,13 @@ def build_execution_state(
             [
                 "Recent actions/results:",
                 "\n".join("- " + _compact(item, 240) for item in recent_actions[-4:]),
+            ]
+        )
+    if memories:
+        parts.extend(
+            [
+                "Relevant saved memories (user-approved):",
+                "\n".join("- " + _compact(item, 220) for item in memories[:3]),
             ]
         )
     return "\n".join(parts)
