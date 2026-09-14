@@ -9,7 +9,14 @@ from playwright.async_api import async_playwright
 from pydantic import BaseModel
 
 from app.agent import manager
-from app.schemas import ResumeRequest, TaskCreate, TaskStatus
+from app.scheduler import Scheduler
+from app.schemas import (
+    ResumeRequest,
+    ScheduledTask,
+    ScheduledTaskCreate,
+    TaskCreate,
+    TaskStatus,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
@@ -19,10 +26,14 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     playwright = await async_playwright().start()
+    scheduler = Scheduler(manager)
     try:
         manager.attach(playwright)
+        await scheduler.start()
+        app.state.scheduler = scheduler
         yield
     finally:
+        await scheduler.stop()
         await playwright.stop()
 
 
@@ -69,6 +80,26 @@ async def create_task(spec: TaskCreate) -> TaskView:
             raise HTTPException(status_code=400, detail=message) from exc
         raise HTTPException(status_code=500, detail=message) from exc
     return _view(task)
+
+
+@app.post("/scheduled-tasks", response_model=ScheduledTask)
+async def create_scheduled_task(spec: ScheduledTaskCreate) -> ScheduledTask:
+    return app.state.scheduler.schedule(spec)
+
+
+@app.get("/scheduled-tasks", response_model=list[ScheduledTask])
+async def list_scheduled_tasks() -> list[ScheduledTask]:
+    return app.state.scheduler.list_tasks()
+
+
+@app.delete("/scheduled-tasks/{scheduled_id}", response_model=ScheduledTask)
+async def delete_scheduled_task(scheduled_id: str) -> ScheduledTask:
+    try:
+        return app.state.scheduler.delete(scheduled_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown scheduled task") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/tasks/{task_id}", response_model=TaskView)

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal, Optional
 
@@ -33,6 +34,38 @@ class TaskCreate(BaseModel):
         if not (value.startswith("http://") or value.startswith("https://")):
             raise ValueError("start_url must be http:// or https://")
         return value
+
+
+class ScheduledTaskStatus(str, Enum):
+    scheduled = "scheduled"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class ScheduledTaskCreate(TaskCreate):
+    run_at: datetime
+
+    @field_validator("run_at")
+    @classmethod
+    def validate_run_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("run_at must include a timezone")
+        if value <= datetime.now(timezone.utc):
+            raise ValueError("run_at must be in the future")
+        return value
+
+
+class ScheduledTask(BaseModel):
+    id: str
+    goal: str
+    start_url: Optional[str] = None
+    profile: UserProfile = Field(default_factory=UserProfile)
+    run_at: datetime
+    status: ScheduledTaskStatus
+    task_id: Optional[str] = None
+    error: str = ""
 
 
 class ResumeRequest(BaseModel):
