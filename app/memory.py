@@ -15,6 +15,23 @@ SENSITIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+STOP_WORDS = {
+    "a", "about", "all", "an", "and", "are", "be", "can", "could",
+    "do", "does", "for", "get", "has", "have", "how", "i", "is",
+    "me", "my", "of", "please", "should", "tell", "the", "to",
+    "what", "which", "would", "you", "your",
+}
+
+CONCEPTS = {
+    "choice": "preference",
+    "favorite": "preference",
+    "favourite": "preference",
+    "like": "preference",
+    "prefer": "preference",
+    "preference": "preference",
+    "setting": "preference",
+}
+
 
 class MemoryStoreError(ValueError):
     pass
@@ -131,7 +148,18 @@ def _clean_value(value: str) -> str:
 
 
 def _keywords(text: str) -> set:
-    return {
-        word.casefold()
-        for word in re.findall(r"[A-Za-z0-9]{3,}", text)
-    }
+    keywords = set()
+    for raw_word in re.findall(r"[A-Za-z0-9]{3,}", text.casefold()):
+        if raw_word in STOP_WORDS:
+            continue
+        word = _singularize(raw_word)
+        keywords.add(CONCEPTS.get(word, word))
+    return keywords
+
+
+def _singularize(word: str) -> str:
+    if word.endswith("ies") and len(word) > 3:
+        return word[:-3] + "y"
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+        return word[:-1]
+    return word

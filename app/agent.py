@@ -9,7 +9,7 @@ from playwright.async_api import Playwright
 
 from app.browser.anakin import create_browser_session
 from app.browser.session import BrowserSession
-from app.browser.tools import dispatch_tool, pending_from_pause
+from app.browser.tools import BROWSER_TOOLS, dispatch_tool, pending_from_pause
 from app.config import settings
 from app.llm import (
     GroqToolClient,
@@ -409,7 +409,12 @@ class TaskManager:
 
         if result.kind == "complete":
 
-            if not _evidence_matches_observation(
+            requires_page_evidence = bool(task.start_url) or any(
+                action.split("(", 1)[0] in BROWSER_TOOLS
+                for action in task.recent_actions
+            )
+
+            if requires_page_evidence and not _evidence_matches_observation(
                 result.evidence,
                 task.current_observation,
             ):
