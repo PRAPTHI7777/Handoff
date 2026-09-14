@@ -31,7 +31,9 @@ Stay on the user's goal. Do not wander. Do not hardcode behavior for any one web
 """
 
 
-def build_user_task_message(goal: str, start_url: str | None, profile_lines: str) -> str:
+from typing import Optional
+
+def build_user_task_message(goal: str, start_url: Optional[str], profile_lines: str) -> str:
     parts = [f"Goal:\n{goal.strip()}"]
     if start_url:
         parts.append(f"Suggested start URL:\n{start_url}")

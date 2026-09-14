@@ -51,7 +51,7 @@ async def health() -> dict:
 
     return {
         "ok": True,
-        "gemini_configured": bool(settings.gemini_api_key),
+        "groq_configured": bool(settings.groq_api_key),
         "anakin_configured": bool(settings.anakin_api_key),
         "browser_mode": settings.browser_mode,
     }
@@ -65,7 +65,7 @@ async def create_task(spec: TaskCreate) -> TaskView:
         message = str(exc)
         if "already active" in message:
             raise HTTPException(status_code=409, detail=message) from exc
-        if "GEMINI_API_KEY" in message:
+        if "GROQ_API_KEY" in message:
             raise HTTPException(status_code=400, detail=message) from exc
         raise HTTPException(status_code=500, detail=message) from exc
     return _view(task)
