@@ -186,6 +186,7 @@ class GroqToolClient:
         self,
         contents: List[Dict[str, Any]],
         system_instruction: str,
+        execution_state: str,
     ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
 
         messages: List[Dict[str, Any]] = [
@@ -194,6 +195,16 @@ class GroqToolClient:
                 "content": truncate_text(system_instruction, 1800),
             }
         ]
+
+        # Keep current state out of ``contents``. Inserting a user message
+        # between an assistant tool call and its result breaks the tool-call
+        # protocol expected by the API.
+        messages.append(
+            {
+                "role": "user",
+                "content": truncate_text(execution_state, 2400),
+            }
+        )
 
         messages.extend(_bounded_history(contents))
 

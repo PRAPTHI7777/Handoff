@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -17,6 +18,7 @@ from app.llm import (
 )
 from app.prompts import (
     SYSTEM_PROMPT,
+    build_execution_state,
     build_user_task_message,
     profile_lines,
 )
@@ -29,6 +31,8 @@ from app.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+MAX_IDENTICAL_FAILURES = 2
 
 
 ACTIVE_STATUSES = {
@@ -63,6 +67,11 @@ class AgentTask:
 
         self._session: Optional[BrowserSession] = None
         self._pending_pause: Dict[str, Any] = {}
+        self.plan = ""
+        self.current_observation = Observation()
+        self.recent_actions: List[str] = []
+        self.failed_actions: Dict[str, int] = {}
+        self._plan_page = ""
 
     def emit(self, event: Dict[str, Any]) -> None:
         event = {
@@ -216,6 +225,8 @@ class TaskManager:
                 user_text_content(initial_message)
             ]
 
+            self._revise_plan(task, obs, "initial page")
+
             while (
                 task.step < settings.max_steps
                 and task.status == TaskStatus.running
@@ -231,6 +242,12 @@ class TaskManager:
                     ) = await self._llm.next_tool(
                         contents,
                         SYSTEM_PROMPT,
+                        build_execution_state(
+                            task.goal,
+                            task.plan,
+                            task.current_observation,
+                            task.recent_actions,
+                        ),
                     )
 
                 except Exception as exc:
@@ -267,6 +284,25 @@ class TaskManager:
                 tool_call_id = (
                     model_content["tool_calls"][0]["id"]
                 )
+
+                signature = _tool_signature(name, args)
+                if task.failed_actions.get(signature, 0) >= MAX_IDENTICAL_FAILURES:
+                    reason = (
+                        "Stopped because "
+                        f"{name} with the same arguments failed "
+                        f"{MAX_IDENTICAL_FAILURES} times. "
+                        "A different recovery action is required."
+                    )
+                    task.status = TaskStatus.failed
+                    task.error = reason
+                    task.emit(
+                        {
+                            "type": "failed",
+                            "status": "failed",
+                            "reason": reason,
+                        }
+                    )
+                    return
 
                 result = await dispatch_tool(
                     session,
@@ -347,13 +383,16 @@ class TaskManager:
 
         if result.kind == "complete":
 
-            if not result.evidence.strip():
+            if not _evidence_matches_observation(
+                result.evidence,
+                task.current_observation,
+            ):
 
                 obs = await session.snapshot()
 
                 msg = (
-                    "complete rejected: evidence is required "
-                    "from the current page."
+                    "complete rejected: evidence must match the "
+                    "current page's title, URL, or visible text."
                 )
 
                 obs.error = msg
@@ -455,6 +494,8 @@ class TaskManager:
             obs,
         )
 
+        self._record_action_result(task, name, args, obs)
+
         contents.append(
             function_response_content(
                 name,
@@ -527,6 +568,8 @@ class TaskManager:
 
         extra = ""
         follow: Optional[ToolResult] = None
+        follow_name = ""
+        follow_args: Dict[str, Any] = {}
 
         if status == TaskStatus.needs_confirmation:
 
@@ -539,6 +582,9 @@ class TaskManager:
                 if pending:
 
                     tool_name, tool_args = pending
+
+                    follow_name = tool_name
+                    follow_args = tool_args
 
                     follow = await dispatch_tool(
                         session,
@@ -606,6 +652,20 @@ class TaskManager:
         ):
             obs = follow.observation
 
+            await self._after_browser(
+                task,
+                session,
+                follow_name,
+                follow_args,
+                obs,
+            )
+            self._record_action_result(
+                task,
+                follow_name,
+                follow_args,
+                obs,
+            )
+
             extra += (
                 "\nAction after confirmation completed."
             )
@@ -635,6 +695,8 @@ class TaskManager:
         obs: Observation,
     ) -> None:
 
+        self._revise_plan(task, obs, tool)
+
         await self._store_screenshot(
             task,
             session,
@@ -653,6 +715,69 @@ class TaskManager:
                 "error": obs.error,
             }
         )
+
+    def _revise_plan(
+        self,
+        task: AgentTask,
+        obs: Observation,
+        trigger: str,
+    ) -> None:
+        """Maintain a compact working plan from the latest page state."""
+        page = (obs.url + " | " + obs.title).strip(" |")
+        page_changed = bool(task._plan_page and page != task._plan_page)
+        task.current_observation = obs
+        task._plan_page = page
+
+        if obs.error:
+            next_step = (
+                "Recovery: the last action failed; use the current refs and "
+                "take a different safe action."
+            )
+        elif page_changed:
+            next_step = (
+                "Revised: the page changed; reassess the current refs before "
+                "continuing toward the goal."
+            )
+        elif trigger == "initial page":
+            next_step = (
+                "Inspect the current refs and take the first safe step toward "
+                "the goal."
+            )
+        else:
+            next_step = (
+                "Continue from the latest observation; verify progress before "
+                "any consequential action or completion."
+            )
+
+        task.plan = (
+            "Goal focus: "
+            + task.goal.strip()[:260]
+            + ". Current page: "
+            + _short_page(obs)
+            + ". "
+            + next_step
+        )
+
+    def _record_action_result(
+        self,
+        task: AgentTask,
+        name: str,
+        args: Dict[str, Any],
+        obs: Observation,
+    ) -> None:
+        signature = _tool_signature(name, args)
+        shown_args = json.dumps(_safe_args(name, args), sort_keys=True)
+        outcome = "ok"
+        if obs.error:
+            count = task.failed_actions.get(signature, 0) + 1
+            task.failed_actions[signature] = count
+            outcome = "failed: " + obs.error
+        else:
+            task.failed_actions.pop(signature, None)
+        task.recent_actions.append(
+            name + "(" + shown_args[:160] + ") -> " + outcome
+        )
+        task.recent_actions = task.recent_actions[-4:]
 
     async def _store_screenshot(
         self,
@@ -694,6 +819,50 @@ def _safe_args(
         }
 
     return args
+
+
+def _tool_signature(name: str, args: Dict[str, Any]) -> str:
+    """Stable identity for detecting a repeated failed model action."""
+    try:
+        encoded = json.dumps(
+            args or {},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        encoded = repr(args)
+    return name + ":" + encoded
+
+
+def _short_page(obs: Observation) -> str:
+    if obs.title:
+        return obs.title[:120]
+    if obs.url:
+        return obs.url[:180]
+    return "unknown page"
+
+
+def _evidence_matches_observation(
+    evidence: str,
+    obs: Observation,
+) -> bool:
+    """Reject completion evidence that is unrelated to the latest page."""
+    evidence = evidence.strip().lower()
+    if not evidence:
+        return False
+
+    for value in (obs.url, obs.title):
+        if value and value.lower() in evidence:
+            return True
+
+    visible = obs.page_text.lower()
+    words = [
+        word.strip(".,:;!?()[]{}\"'")
+        for word in evidence.split()
+    ]
+    meaningful = [word for word in words if len(word) >= 5]
+    matches = sum(1 for word in meaningful if word in visible)
+    return matches >= 2
 
 
 manager = TaskManager()

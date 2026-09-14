@@ -1,3 +1,8 @@
+from typing import List, Optional
+
+from app.schemas import Observation
+
+
 SYSTEM_PROMPT = """You are Handoff, a general-purpose autonomous web task agent.
 
 You complete online tasks by calling tools. You never write Playwright or JavaScript. You never invent CSS selectors. You may only interact with numbered refs from the latest snapshot, like [3].
@@ -13,6 +18,7 @@ Workflow:
 8. You cannot process payments. If the task requires entering card details or paying, call request_human explaining that payment must be completed by the user, or fail if payment was the whole task.
 9. Before complete, verify success from the current snapshot (confirmation text, success URL, or equivalent). complete must quote that evidence. If success is unclear, snapshot or take another safe action instead of completing.
 10. If you are stuck after several attempts, fail with a concrete reason.
+11. Treat the compact execution plan as a working plan, not a script. When the current page or a tool failure contradicts it, revise your approach from the latest observation. Do not repeat an action reported as failed with the same arguments; choose a different safe action, ask the user, or fail.
 
 Tools:
 - navigate(url)
@@ -29,10 +35,6 @@ Tools:
 
 Stay on the user's goal. Do not wander. Do not hardcode behavior for any one website.
 """
-
-
-from typing import Optional
-
 def build_user_task_message(goal: str, start_url: Optional[str], profile_lines: str) -> str:
     parts = [f"Goal:\n{goal.strip()}"]
     if start_url:
@@ -41,6 +43,30 @@ def build_user_task_message(goal: str, start_url: Optional[str], profile_lines: 
         parts.append(f"User profile (use these values when the page asks; do not invent others):\n{profile_lines}")
     parts.append("Begin. Call a tool.")
     return "\n\n".join(parts)
+
+
+def build_execution_state(
+    goal: str,
+    plan: str,
+    observation: Observation,
+    recent_actions: List[str],
+) -> str:
+    """Build the small, current state supplied on every model turn."""
+    parts = [
+        "Current execution state (use the latest observation over old history):",
+        "Goal: " + _compact(goal, 360),
+        "Plan: " + _compact(plan, 420),
+        "Current observation:",
+        _compact(observation.as_prompt(), 1100),
+    ]
+    if recent_actions:
+        parts.extend(
+            [
+                "Recent actions/results:",
+                "\n".join("- " + _compact(item, 240) for item in recent_actions[-4:]),
+            ]
+        )
+    return "\n".join(parts)
 
 
 def profile_lines(name: str, email: str, phone: str) -> str:
@@ -52,3 +78,10 @@ def profile_lines(name: str, email: str, phone: str) -> str:
     if phone.strip():
         rows.append(f"- phone: {phone.strip()}")
     return "\n".join(rows)
+
+
+def _compact(text: str, limit: int) -> str:
+    text = str(text).replace("\x00", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 16] + " ...[truncated]"
