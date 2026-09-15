@@ -1,4 +1,5 @@
 import asyncio
+import calendar
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
 from uuid import uuid4
@@ -8,6 +9,7 @@ from app.schemas import (
     ScheduledTask,
     ScheduledTaskCreate,
     ScheduledTaskStatus,
+    RecurrenceKind,
     TaskCreate,
     TaskStatus,
 )
@@ -57,6 +59,8 @@ class Scheduler:
             start_url=spec.start_url,
             profile=spec.profile,
             run_at=spec.run_at,
+            recurrence=spec.recurrence,
+            next_run_at=spec.run_at,
             status=ScheduledTaskStatus.scheduled,
         )
         self.tasks[scheduled.id] = scheduled
@@ -102,8 +106,8 @@ class Scheduler:
     def _next_time(self) -> Optional[datetime]:
         due = [
             max(
-                task.run_at,
-                self._retry_at.get(task.id, task.run_at),
+                task.next_run_at,
+                self._retry_at.get(task.id, task.next_run_at),
             )
             for task in self.tasks.values()
             if task.status == ScheduledTaskStatus.scheduled
@@ -130,12 +134,12 @@ class Scheduler:
             if (
                 task.status == ScheduledTaskStatus.scheduled
                 and max(
-                    task.run_at,
-                    self._retry_at.get(task.id, task.run_at),
+                    task.next_run_at,
+                    self._retry_at.get(task.id, task.next_run_at),
                 ) <= now
             )
         ]
-        for scheduled in sorted(due, key=lambda task: (task.run_at, task.id)):
+        for scheduled in sorted(due, key=lambda task: (task.next_run_at, task.id)):
             if self.manager.has_active():
                 self._retry_at[scheduled.id] = now + RETRY_DELAY
                 continue
@@ -149,8 +153,11 @@ class Scheduler:
                 )
             except RuntimeError as exc:
                 if "already active" not in str(exc):
-                    scheduled.status = ScheduledTaskStatus.failed
-                    scheduled.error = str(exc)
+                    if scheduled.recurrence == RecurrenceKind.none:
+                        scheduled.status = ScheduledTaskStatus.failed
+                        scheduled.error = str(exc)
+                    else:
+                        self._reschedule_recurring(scheduled, str(exc))
                     continue
                 self._retry_at[scheduled.id] = now + RETRY_DELAY
                 continue
@@ -173,8 +180,63 @@ class Scheduler:
             TaskStatus.needs_human,
         }:
             await asyncio.sleep(POLL_DELAY)
+        scheduled.last_run_at = scheduled.next_run_at
         if agent_task.status == TaskStatus.completed:
-            scheduled.status = ScheduledTaskStatus.completed
+            if scheduled.recurrence == RecurrenceKind.none:
+                scheduled.status = ScheduledTaskStatus.completed
+            else:
+                self._reschedule_recurring(scheduled, "")
         else:
+            if scheduled.recurrence == RecurrenceKind.none:
+                scheduled.status = ScheduledTaskStatus.failed
+                scheduled.error = agent_task.error
+            else:
+                self._reschedule_recurring(scheduled, agent_task.error)
+
+    def _reschedule_recurring(self, scheduled: ScheduledTask, error: str) -> None:
+        next_run_at = _next_occurrence(
+            scheduled.next_run_at,
+            scheduled.recurrence,
+        )
+        if next_run_at is None:
             scheduled.status = ScheduledTaskStatus.failed
-            scheduled.error = agent_task.error
+            scheduled.error = error or "Could not calculate the next occurrence."
+            return
+        scheduled.next_run_at = next_run_at
+        scheduled.status = ScheduledTaskStatus.scheduled
+        scheduled.error = error
+        self._retry_at.pop(scheduled.id, None)
+        self._wake.set()
+
+
+def _next_occurrence(
+    current: datetime,
+    recurrence: RecurrenceKind,
+) -> Optional[datetime]:
+    """Return the next occurrence using the schedule's local timezone."""
+    if recurrence == RecurrenceKind.none:
+        return None
+
+    local = current.astimezone(current.tzinfo)
+    if recurrence == RecurrenceKind.daily:
+        target = local.date() + timedelta(days=1)
+        return _at_local_date(local, target)
+    if recurrence == RecurrenceKind.weekly:
+        target = local.date() + timedelta(days=7)
+        return _at_local_date(local, target)
+
+    month = local.month + 1
+    year = local.year
+    if month > 12:
+        month = 1
+        year += 1
+    day = min(local.day, calendar.monthrange(year, month)[1])
+    return local.replace(year=year, month=month, day=day)
+
+
+def _at_local_date(current: datetime, target) -> datetime:
+    return current.replace(
+        year=target.year,
+        month=target.month,
+        day=target.day,
+    )

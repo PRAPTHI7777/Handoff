@@ -40,6 +40,15 @@
             Date and time
             <input id="run-at" type="datetime-local" />
             <span class="field-help">Uses your local time.</span>
+            <span>
+              Recurrence
+              <select id="recurrence">
+                <option value="none" selected>Once</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </span>
           </label>
           <button type="submit" id="start-btn">Start task</button>
         </form>

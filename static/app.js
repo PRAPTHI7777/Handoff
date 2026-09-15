@@ -6,6 +6,7 @@ const shot = document.getElementById("shot");
 const startBtn = document.getElementById("start-btn");
 const scheduleField = document.getElementById("schedule-field");
 const runAtInput = document.getElementById("run-at");
+const recurrenceInput = document.getElementById("recurrence");
 const scheduledList = document.getElementById("scheduled-list");
 const scheduledEmpty = document.getElementById("scheduled-empty");
 
@@ -53,6 +54,7 @@ form.addEventListener("submit", async (event) => {
         throw new Error("Choose a future date and time.");
       }
       body.run_at = runAt.toISOString();
+      body.recurrence = recurrenceInput.value;
     }
     const res = await fetch(mode === "schedule" ? "/scheduled-tasks" : "/tasks", {
       method: "POST",
@@ -67,6 +69,7 @@ form.addEventListener("submit", async (event) => {
       document.querySelector('input[name="run-mode"][value="now"]').checked = true;
       scheduleField.classList.add("hidden");
       runAtInput.required = false;
+      recurrenceInput.value = "none";
       startBtn.textContent = "Start task";
       await loadScheduledTasks();
       return;
@@ -86,7 +89,9 @@ async function loadScheduledTasks() {
   const data = await res.json();
   if (!res.ok) throw new Error(data.detail || "Could not load scheduled tasks");
   const scheduledTasks = data.filter((task) => task.status !== "cancelled");
-  const activeTask = scheduledTasks.find((task) => task.task_id);
+  const activeTask = scheduledTasks.find(
+    (task) => task.task_id && ["running", "needs_info", "needs_confirmation", "needs_human"].includes(task.status),
+  ) || scheduledTasks.find((task) => task.task_id);
   if (activeTask && activeTask.task_id !== currentTaskId) {
     currentTaskId = activeTask.task_id;
     meta.textContent = `Task ${activeTask.task_id} · ${activeTask.status}`;
@@ -102,9 +107,17 @@ async function loadScheduledTasks() {
     goal.textContent = task.goal;
     const time = document.createElement("span");
     time.className = "scheduled-time";
-    time.textContent = `${formatDate(task.run_at)} · ${task.status}`;
+    const nextRun = task.next_run_at || task.run_at;
+    const recurrence = formatRecurrence(task.recurrence);
+    time.textContent = `${recurrence} · next ${formatDate(nextRun)} · ${task.status}`;
     details.appendChild(goal);
     details.appendChild(time);
+    if (task.error) {
+      const error = document.createElement("span");
+      error.className = "scheduled-error";
+      error.textContent = `Latest error: ${task.error}`;
+      details.appendChild(error);
+    }
     item.appendChild(details);
     if (task.status === "scheduled") {
       const cancel = document.createElement("button");
@@ -135,6 +148,16 @@ function formatDate(value) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatRecurrence(value) {
+  const labels = {
+    none: "Once",
+    daily: "Daily",
+    weekly: "Weekly",
+    monthly: "Monthly",
+  };
+  return labels[value] || "Once";
 }
 
 function listen(taskId) {

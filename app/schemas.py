@@ -44,8 +44,16 @@ class ScheduledTaskStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class RecurrenceKind(str, Enum):
+    none = "none"
+    daily = "daily"
+    weekly = "weekly"
+    monthly = "monthly"
+
+
 class ScheduledTaskCreate(TaskCreate):
     run_at: datetime
+    recurrence: RecurrenceKind = RecurrenceKind.none
 
     @field_validator("run_at")
     @classmethod
@@ -63,6 +71,9 @@ class ScheduledTask(BaseModel):
     start_url: Optional[str] = None
     profile: UserProfile = Field(default_factory=UserProfile)
     run_at: datetime
+    recurrence: RecurrenceKind = RecurrenceKind.none
+    next_run_at: datetime
+    last_run_at: Optional[datetime] = None
     status: ScheduledTaskStatus
     task_id: Optional[str] = None
     error: str = ""
