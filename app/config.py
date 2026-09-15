@@ -32,6 +32,17 @@ class Settings:
         )
     )
 
+    schedule_file: Path = Path(
+        os.getenv(
+            "SCHEDULE_FILE",
+            str(
+                Path(__file__).resolve().parent.parent
+                / "data"
+                / "scheduled_tasks.json"
+            ),
+        )
+    )
+
     groq_api_key: str = os.getenv(
         "GROQ_API_KEY",
         "",

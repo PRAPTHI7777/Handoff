@@ -1,6 +1,11 @@
 import asyncio
 import calendar
+import json
+import logging
+import os
+import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 from uuid import uuid4
 
@@ -17,15 +22,19 @@ from app.schemas import (
 
 RETRY_DELAY = timedelta(seconds=1)
 POLL_DELAY = 0.2
+logger = logging.getLogger(__name__)
 
 
 class Scheduler:
-    """In-memory scheduler for one-time tasks."""
+    """Local JSON-backed scheduler for one-time and recurring tasks."""
 
-    def __init__(self, manager: TaskManager) -> None:
+    def __init__(self, manager: TaskManager, path: Optional[Path] = None) -> None:
         self.manager = manager
+        self.path = path or _default_schedule_path()
         self.tasks: Dict[str, ScheduledTask] = {}
         self._retry_at: Dict[str, datetime] = {}
+        self._lock = threading.RLock()
+        self._loaded = False
         self._wake = asyncio.Event()
         self._stop = asyncio.Event()
         self._runner: Optional[asyncio.Task] = None
@@ -34,6 +43,7 @@ class Scheduler:
     async def start(self) -> None:
         if self._runner is not None:
             return
+        self.load()
         self._stop.clear()
         self._runner = asyncio.create_task(
             self._run(),
@@ -63,26 +73,88 @@ class Scheduler:
             next_run_at=spec.run_at,
             status=ScheduledTaskStatus.scheduled,
         )
-        self.tasks[scheduled.id] = scheduled
+        with self._lock:
+            self.tasks[scheduled.id] = scheduled
+            self._save_locked()
         self._wake.set()
         return scheduled
 
     def list_tasks(self) -> List[ScheduledTask]:
-        return sorted(
-            self.tasks.values(),
-            key=lambda task: (task.run_at, task.id),
-        )
+        with self._lock:
+            return sorted(
+                self.tasks.values(),
+                key=lambda task: (task.run_at, task.id),
+            )
 
     def delete(self, scheduled_id: str) -> ScheduledTask:
-        scheduled = self.tasks.get(scheduled_id)
-        if scheduled is None:
-            raise KeyError(scheduled_id)
-        if scheduled.status != ScheduledTaskStatus.scheduled:
-            raise RuntimeError("Only scheduled tasks can be deleted")
-        scheduled.status = ScheduledTaskStatus.cancelled
-        self._retry_at.pop(scheduled_id, None)
+        with self._lock:
+            scheduled = self.tasks.get(scheduled_id)
+            if scheduled is None:
+                raise KeyError(scheduled_id)
+            if scheduled.status != ScheduledTaskStatus.scheduled:
+                raise RuntimeError("Only scheduled tasks can be deleted")
+            scheduled.status = ScheduledTaskStatus.cancelled
+            self._retry_at.pop(scheduled_id, None)
+            self._save_locked()
         self._wake.set()
         return scheduled
+
+    def load(self) -> None:
+        with self._lock:
+            if self._loaded:
+                return
+            self._loaded = True
+            if not self.path.exists():
+                return
+            try:
+                with self.path.open("r", encoding="utf-8") as handle:
+                    raw = json.load(handle)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.error("Could not load scheduled tasks from %s: %s", self.path, exc)
+                return
+
+            records = raw.get("scheduled_tasks") if isinstance(raw, dict) else None
+            if not isinstance(records, list):
+                logger.error("Could not load scheduled tasks from %s: invalid JSON format", self.path)
+                return
+
+            restored: Dict[str, ScheduledTask] = {}
+            for index, record in enumerate(records):
+                try:
+                    scheduled = ScheduledTask.model_validate(record)
+                except (TypeError, ValueError) as exc:
+                    logger.error(
+                        "Skipping invalid scheduled task record %s in %s: %s",
+                        index,
+                        self.path,
+                        exc,
+                    )
+                    continue
+                if scheduled.status == ScheduledTaskStatus.running:
+                    scheduled.status = ScheduledTaskStatus.scheduled
+                scheduled.task_id = None
+                restored[scheduled.id] = scheduled
+            self.tasks = restored
+
+    def _save_locked(self) -> None:
+        data = {
+            "scheduled_tasks": [
+                task.model_dump(mode="json")
+                for task in self.tasks.values()
+            ]
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, self.path)
+
+    def _save(self) -> None:
+        with self._lock:
+            self._save_locked()
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -104,14 +176,15 @@ class Scheduler:
             await self._run_due_tasks()
 
     def _next_time(self) -> Optional[datetime]:
-        due = [
-            max(
-                task.next_run_at,
-                self._retry_at.get(task.id, task.next_run_at),
-            )
-            for task in self.tasks.values()
-            if task.status == ScheduledTaskStatus.scheduled
-        ]
+        with self._lock:
+            due = [
+                max(
+                    task.next_run_at,
+                    self._retry_at.get(task.id, task.next_run_at),
+                )
+                for task in self.tasks.values()
+                if task.status == ScheduledTaskStatus.scheduled
+            ]
         return min(due) if due else None
 
     async def _wait_for_wake(self) -> None:
@@ -128,21 +201,28 @@ class Scheduler:
 
     async def _run_due_tasks(self) -> None:
         now = datetime.now(timezone.utc)
-        due = [
-            task
-            for task in self.tasks.values()
-            if (
-                task.status == ScheduledTaskStatus.scheduled
-                and max(
-                    task.next_run_at,
-                    self._retry_at.get(task.id, task.next_run_at),
-                ) <= now
-            )
-        ]
+        with self._lock:
+            due = [
+                task
+                for task in self.tasks.values()
+                if (
+                    task.status == ScheduledTaskStatus.scheduled
+                    and max(
+                        task.next_run_at,
+                        self._retry_at.get(task.id, task.next_run_at),
+                    ) <= now
+                )
+            ]
         for scheduled in sorted(due, key=lambda task: (task.next_run_at, task.id)):
             if self.manager.has_active():
-                self._retry_at[scheduled.id] = now + RETRY_DELAY
+                with self._lock:
+                    self._retry_at[scheduled.id] = now + RETRY_DELAY
                 continue
+            with self._lock:
+                if scheduled.status != ScheduledTaskStatus.scheduled:
+                    continue
+                scheduled.status = ScheduledTaskStatus.running
+                self._save_locked()
             try:
                 agent_task = await self.manager.start_task(
                     TaskCreate(
@@ -154,17 +234,23 @@ class Scheduler:
             except RuntimeError as exc:
                 if "already active" not in str(exc):
                     if scheduled.recurrence == RecurrenceKind.none:
-                        scheduled.status = ScheduledTaskStatus.failed
-                        scheduled.error = str(exc)
+                        with self._lock:
+                            scheduled.status = ScheduledTaskStatus.failed
+                            scheduled.error = str(exc)
+                            self._save_locked()
                     else:
                         self._reschedule_recurring(scheduled, str(exc))
                     continue
-                self._retry_at[scheduled.id] = now + RETRY_DELAY
+                with self._lock:
+                    scheduled.status = ScheduledTaskStatus.scheduled
+                    self._retry_at[scheduled.id] = now + RETRY_DELAY
+                    self._save_locked()
                 continue
 
-            scheduled.status = ScheduledTaskStatus.running
-            scheduled.task_id = agent_task.id
-            self._retry_at.pop(scheduled.id, None)
+            with self._lock:
+                scheduled.task_id = agent_task.id
+                self._retry_at.pop(scheduled.id, None)
+                self._save_locked()
             watcher = asyncio.create_task(
                 self._watch(scheduled, agent_task),
                 name="handoff-scheduled-" + scheduled.id,
@@ -180,20 +266,27 @@ class Scheduler:
             TaskStatus.needs_human,
         }:
             await asyncio.sleep(POLL_DELAY)
-        scheduled.last_run_at = scheduled.next_run_at
-        if agent_task.status == TaskStatus.completed:
-            if scheduled.recurrence == RecurrenceKind.none:
-                scheduled.status = ScheduledTaskStatus.completed
+        with self._lock:
+            scheduled.last_run_at = scheduled.next_run_at
+            if agent_task.status == TaskStatus.completed:
+                if scheduled.recurrence == RecurrenceKind.none:
+                    scheduled.status = ScheduledTaskStatus.completed
+                else:
+                    self._reschedule_recurring_locked(scheduled, "")
             else:
-                self._reschedule_recurring(scheduled, "")
-        else:
-            if scheduled.recurrence == RecurrenceKind.none:
-                scheduled.status = ScheduledTaskStatus.failed
-                scheduled.error = agent_task.error
-            else:
-                self._reschedule_recurring(scheduled, agent_task.error)
+                if scheduled.recurrence == RecurrenceKind.none:
+                    scheduled.status = ScheduledTaskStatus.failed
+                    scheduled.error = agent_task.error
+                else:
+                    self._reschedule_recurring_locked(scheduled, agent_task.error)
+            self._save_locked()
 
     def _reschedule_recurring(self, scheduled: ScheduledTask, error: str) -> None:
+        with self._lock:
+            self._reschedule_recurring_locked(scheduled, error)
+            self._save_locked()
+
+    def _reschedule_recurring_locked(self, scheduled: ScheduledTask, error: str) -> None:
         next_run_at = _next_occurrence(
             scheduled.next_run_at,
             scheduled.recurrence,
@@ -207,6 +300,12 @@ class Scheduler:
         scheduled.error = error
         self._retry_at.pop(scheduled.id, None)
         self._wake.set()
+
+
+def _default_schedule_path() -> Path:
+    from app.config import settings
+
+    return settings.schedule_file
 
 
 def _next_occurrence(

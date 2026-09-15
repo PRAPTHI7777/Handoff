@@ -9,5 +9,7 @@ __pycache__/
 *.webm
 data/memories.json
 data/memories.json.tmp
+data/scheduled_tasks.json
+data/scheduled_tasks.json.tmp
 .idea/
 .vscode/

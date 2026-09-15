@@ -9,6 +9,7 @@ from playwright.async_api import async_playwright
 from pydantic import BaseModel
 
 from app.agent import manager
+from app.config import settings
 from app.scheduler import Scheduler
 from app.schemas import (
     ResumeRequest,
@@ -26,7 +27,7 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     playwright = await async_playwright().start()
-    scheduler = Scheduler(manager)
+    scheduler = Scheduler(manager, settings.schedule_file)
     try:
         manager.attach(playwright)
         await scheduler.start()
