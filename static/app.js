@@ -4,9 +4,28 @@ const meta = document.getElementById("meta");
 const gate = document.getElementById("gate");
 const shot = document.getElementById("shot");
 const startBtn = document.getElementById("start-btn");
+const scheduleField = document.getElementById("schedule-field");
+const runAtInput = document.getElementById("run-at");
+const scheduledList = document.getElementById("scheduled-list");
+const scheduledEmpty = document.getElementById("scheduled-empty");
 
 let currentTaskId = null;
 let source = null;
+
+document.querySelectorAll('input[name="run-mode"]').forEach((input) => {
+  input.addEventListener("change", () => {
+    const scheduling = input.checked && input.value === "schedule";
+    if (scheduling) {
+      scheduleField.classList.remove("hidden");
+      startBtn.textContent = "Schedule task";
+      runAtInput.required = true;
+    } else if (input.checked) {
+      scheduleField.classList.add("hidden");
+      startBtn.textContent = "Start task";
+      runAtInput.required = false;
+    }
+  });
+});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -15,6 +34,7 @@ form.addEventListener("submit", async (event) => {
   gate.classList.add("hidden");
   gate.innerHTML = "";
   try {
+    const mode = document.querySelector('input[name="run-mode"]:checked').value;
     const body = {
       goal: document.getElementById("goal").value.trim(),
       start_url: document.getElementById("start-url").value.trim() || null,
@@ -24,13 +44,33 @@ form.addEventListener("submit", async (event) => {
         phone: document.getElementById("phone").value.trim(),
       },
     };
-    const res = await fetch("/tasks", {
+    if (mode === "schedule") {
+      if (!runAtInput.value) {
+        throw new Error("Choose a date and time for the scheduled task.");
+      }
+      const runAt = new Date(runAtInput.value);
+      if (Number.isNaN(runAt.getTime()) || runAt <= new Date()) {
+        throw new Error("Choose a future date and time.");
+      }
+      body.run_at = runAt.toISOString();
+    }
+    const res = await fetch(mode === "schedule" ? "/scheduled-tasks" : "/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Could not start task");
+    if (!res.ok) throw new Error(data.detail || "Could not process task");
+    if (mode === "schedule") {
+      meta.textContent = `Scheduled for ${formatDate(data.run_at)} · ${data.goal}`;
+      form.reset();
+      document.querySelector('input[name="run-mode"][value="now"]').checked = true;
+      scheduleField.classList.add("hidden");
+      runAtInput.required = false;
+      startBtn.textContent = "Start task";
+      await loadScheduledTasks();
+      return;
+    }
     currentTaskId = data.id;
     meta.textContent = `Task ${data.id} · ${data.status}`;
     listen(data.id);
@@ -40,6 +80,62 @@ form.addEventListener("submit", async (event) => {
     startBtn.disabled = false;
   }
 });
+
+async function loadScheduledTasks() {
+  const res = await fetch("/scheduled-tasks");
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || "Could not load scheduled tasks");
+  const scheduledTasks = data.filter((task) => task.status !== "cancelled");
+  const activeTask = scheduledTasks.find((task) => task.task_id);
+  if (activeTask && activeTask.task_id !== currentTaskId) {
+    currentTaskId = activeTask.task_id;
+    meta.textContent = `Task ${activeTask.task_id} · ${activeTask.status}`;
+    listen(activeTask.task_id);
+  }
+  scheduledList.innerHTML = "";
+  scheduledEmpty.classList.toggle("hidden", scheduledTasks.length > 0);
+  scheduledTasks.forEach((task) => {
+    const item = document.createElement("li");
+    item.className = "scheduled-item";
+    const details = document.createElement("div");
+    const goal = document.createElement("strong");
+    goal.textContent = task.goal;
+    const time = document.createElement("span");
+    time.className = "scheduled-time";
+    time.textContent = `${formatDate(task.run_at)} · ${task.status}`;
+    details.appendChild(goal);
+    details.appendChild(time);
+    item.appendChild(details);
+    if (task.status === "scheduled") {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "secondary";
+      cancel.textContent = "Cancel";
+      cancel.onclick = () => cancelScheduledTask(task.id);
+      item.appendChild(cancel);
+    }
+    scheduledList.appendChild(item);
+  });
+}
+
+async function cancelScheduledTask(taskId) {
+  try {
+    const res = await fetch(`/scheduled-tasks/${taskId}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not cancel task");
+    meta.textContent = `Cancelled scheduled task · ${data.goal}`;
+    await loadScheduledTasks();
+  } catch (err) {
+    addLine("fail", String(err.message || err));
+  }
+}
+
+function formatDate(value) {
+  return new Date(value).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
 
 function listen(taskId) {
   if (source) source.close();
@@ -65,18 +161,27 @@ function handleEvent(event) {
   if (event.type === "pause") {
     addLine("pause", formatEvent(event));
     renderGate(event);
+    loadScheduledTasks().catch((err) => {
+      addLine("fail", String(err.message || err));
+    });
     return;
   }
   if (event.type === "completed") {
     addLine("ok", formatEvent(event));
     gate.classList.add("hidden");
     if (source) source.close();
+    loadScheduledTasks().catch((err) => {
+      addLine("fail", String(err.message || err));
+    });
     return;
   }
   if (event.type === "failed") {
     addLine("fail", formatEvent(event));
     gate.classList.add("hidden");
     if (source) source.close();
+    loadScheduledTasks().catch((err) => {
+      addLine("fail", String(err.message || err));
+    });
     return;
   }
   addLine("", formatEvent(event));
@@ -185,3 +290,13 @@ async function resume(payload) {
   gate.classList.add("hidden");
   gate.innerHTML = "";
 }
+
+loadScheduledTasks().catch((err) => {
+  addLine("fail", String(err.message || err));
+});
+
+setInterval(() => {
+  loadScheduledTasks().catch((err) => {
+    addLine("fail", String(err.message || err));
+  });
+}, 1000);

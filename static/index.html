@@ -25,10 +25,31 @@
             <label>Email <input id="email" type="email" autocomplete="email" /></label>
             <label>Phone <input id="phone" autocomplete="tel" /></label>
           </div>
+          <fieldset class="mode-picker">
+            <legend>When should it run?</legend>
+            <label class="choice">
+              <input type="radio" name="run-mode" value="now" checked />
+              Run now
+            </label>
+            <label class="choice">
+              <input type="radio" name="run-mode" value="schedule" />
+              Schedule
+            </label>
+          </fieldset>
+          <label id="schedule-field" class="hidden">
+            Date and time
+            <input id="run-at" type="datetime-local" />
+            <span class="field-help">Uses your local time.</span>
+          </label>
           <button type="submit" id="start-btn">Start task</button>
         </form>
         <p id="meta" class="meta"></p>
         <div id="gate" class="gate hidden"></div>
+        <section class="scheduled-section" aria-labelledby="scheduled-heading">
+          <h2 id="scheduled-heading">Scheduled tasks</h2>
+          <p id="scheduled-empty" class="meta">No scheduled tasks.</p>
+          <ul id="scheduled-list" class="scheduled-list"></ul>
+        </section>
       </section>
       <section class="panel">
         <h2>Live view</h2>
@@ -36,6 +57,6 @@
         <ol id="log" class="log"></ol>
       </section>
     </main>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=2"></script>
   </body>
 </html>

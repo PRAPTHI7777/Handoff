@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import re
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -72,7 +71,6 @@ class AgentTask:
         self.error = ""
 
         self._session: Optional[BrowserSession] = None
-        self._pending_pause: Dict[str, Any] = {}
         self.plan = ""
         self.current_observation = Observation()
         self.recent_actions: List[str] = []
@@ -657,7 +655,6 @@ class TaskManager:
         payload = result.pause_payload
 
         task.status = status
-        task._pending_pause = payload
 
         task.resume_event.clear()
         task.resume_payload = None

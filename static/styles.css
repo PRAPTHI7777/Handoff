@@ -39,6 +39,26 @@ input, textarea, button {
   border-radius: 6px;
   padding: 8px 10px;
 }
+fieldset.mode-picker {
+  display: flex;
+  gap: 16px;
+  margin: 4px 0 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+fieldset.mode-picker legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.choice input { accent-color: var(--accent); }
+.field-help { color: var(--muted); font-size: 12px; }
 .row { display: grid; grid-template-columns: 1fr; gap: 12px; }
 button {
   background: var(--accent);
@@ -79,6 +99,40 @@ button.secondary { background: transparent; color: var(--text); border: 1px soli
   padding: 12px;
   border: 1px solid var(--accent);
   border-radius: 6px;
+}
+.scheduled-section {
+  margin-top: 28px;
+}
+.scheduled-section h2 {
+  font-size: 16px;
+}
+.scheduled-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.scheduled-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 13px;
+}
+.scheduled-time {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
+.scheduled-item button {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  font-size: 12px;
 }
 @media (min-width: 800px) {
   .row { grid-template-columns: 1fr 1fr 1fr; }
