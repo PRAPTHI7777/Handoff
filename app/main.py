@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.agent import manager
 from app.config import settings
+from app.profile import ProfileStore, ProfileStoreError
 from app.scheduler import Scheduler
 from app.schemas import (
     ResumeRequest,
@@ -17,6 +18,7 @@ from app.schemas import (
     ScheduledTaskCreate,
     TaskCreate,
     TaskStatus,
+    UserProfile,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -40,6 +42,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Handoff", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+profile_store = ProfileStore(settings.profile_file)
 
 
 class TaskView(BaseModel):
@@ -50,6 +53,22 @@ class TaskView(BaseModel):
     backend: str
     summary: str
     error: str
+
+
+@app.get("/profile", response_model=UserProfile)
+async def get_profile() -> UserProfile:
+    try:
+        return profile_store.load()
+    except ProfileStoreError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/profile", response_model=UserProfile)
+async def save_profile(profile: UserProfile) -> UserProfile:
+    try:
+        return profile_store.save(profile)
+    except ProfileStoreError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/")

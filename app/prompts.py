@@ -81,7 +81,13 @@ def build_execution_state(
     return "\n".join(parts)
 
 
-def profile_lines(name: str, email: str, phone: str) -> str:
+def profile_lines(
+    name: str = "",
+    email: str = "",
+    phone: str = "",
+    address: str = "",
+    preferences: str = "",
+) -> str:
     rows = []
     if name.strip():
         rows.append(f"- name: {name.strip()}")
@@ -89,6 +95,10 @@ def profile_lines(name: str, email: str, phone: str) -> str:
         rows.append(f"- email: {email.strip()}")
     if phone.strip():
         rows.append(f"- phone: {phone.strip()}")
+    if address.strip():
+        rows.append(f"- address: {address.strip()}")
+    if preferences.strip():
+        rows.append(f"- preferences: {preferences.strip()}")
     return "\n".join(rows)
 
 

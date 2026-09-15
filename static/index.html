@@ -52,6 +52,19 @@
           </label>
           <button type="submit" id="start-btn">Start task</button>
         </form>
+        <section class="scheduled-section" aria-labelledby="profile-heading">
+          <h2 id="profile-heading">My Profile</h2>
+          <p class="meta">Save reusable details for future tasks. Sensitive information is not stored.</p>
+          <form id="profile-form">
+            <label>Name <input id="profile-name" autocomplete="name" /></label>
+            <label>Email <input id="profile-email" type="email" autocomplete="email" /></label>
+            <label>Phone <input id="profile-phone" autocomplete="tel" /></label>
+            <label>Address <input id="profile-address" autocomplete="street-address" /></label>
+            <label>Preferences <textarea id="profile-preferences" rows="3"></textarea></label>
+            <button type="submit" id="profile-save">Save profile</button>
+            <p id="profile-status" class="meta" role="status"></p>
+          </form>
+        </section>
         <p id="meta" class="meta"></p>
         <div id="gate" class="gate hidden"></div>
         <section class="scheduled-section" aria-labelledby="scheduled-heading">
@@ -66,6 +79,6 @@
         <ol id="log" class="log"></ol>
       </section>
     </main>
-    <script src="/static/app.js?v=2"></script>
+    <script src="/static/app.js?v=3"></script>
   </body>
 </html>

@@ -17,6 +17,7 @@ from app.llm import (
     user_text_content,
 )
 from app.memory import MemoryStore, MemoryStoreError
+from app.profile import ProfileStore, ProfileStoreError
 from app.prompts import (
     SYSTEM_PROMPT,
     build_execution_state,
@@ -32,6 +33,7 @@ from app.schemas import (
     TaskCreate,
     TaskStatus,
     ToolResult,
+    UserProfile,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +96,7 @@ class TaskManager:
         self._playwright: Optional[Playwright] = None
         self._llm: Optional[GroqToolClient] = None
         self._memory_store = MemoryStore(settings.memory_file)
+        self._profile_store = ProfileStore(settings.profile_file)
 
     def attach(self, playwright: Playwright) -> None:
         self._playwright = playwright
@@ -131,6 +134,9 @@ class TaskManager:
                 "Wait for it to finish or fail."
             )
 
+        profile = self._load_profile()
+        effective_profile = _merge_profiles(profile, spec.profile)
+        spec = spec.model_copy(update={"profile": effective_profile})
         task = AgentTask(spec)
 
         self.tasks[task.id] = task
@@ -215,6 +221,8 @@ class TaskManager:
                 task.profile.name,
                 task.profile.email,
                 task.profile.phone,
+                task.profile.address,
+                task.profile.preferences,
             )
 
             task.relevant_memories = self._relevant_memories(task.goal)
@@ -549,6 +557,13 @@ class TaskManager:
         except MemoryStoreError:
             logger.exception("Could not retrieve local memories")
             return []
+
+    def _load_profile(self):
+        try:
+            return self._profile_store.load()
+        except ProfileStoreError:
+            logger.exception("Could not load reusable user profile")
+            return UserProfile()
 
     def _run_memory_tool(
         self,
@@ -932,6 +947,18 @@ def _memory_view(item: Dict[str, str]) -> Dict[str, str]:
         "value": item["value"],
         "created_at": item["created_at"],
     }
+
+
+def _merge_profiles(
+    saved: UserProfile,
+    task_specific: UserProfile,
+) -> UserProfile:
+    values = {}
+    for field in ("name", "email", "phone", "address", "preferences"):
+        task_value = getattr(task_specific, field).strip()
+        saved_value = getattr(saved, field).strip()
+        values[field] = task_value or saved_value
+    return UserProfile(**values)
 
 
 def _explicit_memory_request(

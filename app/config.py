@@ -32,6 +32,17 @@ class Settings:
         )
     )
 
+    profile_file: Path = Path(
+        os.getenv(
+            "PROFILE_FILE",
+            str(
+                Path(__file__).resolve().parent.parent
+                / "data"
+                / "profile.json"
+            ),
+        )
+    )
+
     schedule_file: Path = Path(
         os.getenv(
             "SCHEDULE_FILE",

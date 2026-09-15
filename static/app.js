@@ -9,9 +9,71 @@ const runAtInput = document.getElementById("run-at");
 const recurrenceInput = document.getElementById("recurrence");
 const scheduledList = document.getElementById("scheduled-list");
 const scheduledEmpty = document.getElementById("scheduled-empty");
+const profileForm = document.getElementById("profile-form");
+const profileSave = document.getElementById("profile-save");
+const profileStatus = document.getElementById("profile-status");
 
 let currentTaskId = null;
 let source = null;
+
+loadProfile().catch((err) => {
+  showProfileStatus(String(err.message || err), true);
+});
+
+profileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  profileSave.disabled = true;
+  showProfileStatus("");
+  try {
+    const res = await fetch("/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(profileValues()),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || "Could not save profile");
+    }
+    setProfileValues(data);
+    showProfileStatus("Profile saved.");
+  } catch (err) {
+    showProfileStatus(String(err.message || err), true);
+  } finally {
+    profileSave.disabled = false;
+  }
+});
+
+async function loadProfile() {
+  const res = await fetch("/profile");
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || "Could not load profile");
+  }
+  setProfileValues(data);
+}
+
+function profileValues() {
+  return {
+    name: document.getElementById("profile-name").value.trim(),
+    email: document.getElementById("profile-email").value.trim(),
+    phone: document.getElementById("profile-phone").value.trim(),
+    address: document.getElementById("profile-address").value.trim(),
+    preferences: document.getElementById("profile-preferences").value.trim(),
+  };
+}
+
+function setProfileValues(profile) {
+  document.getElementById("profile-name").value = profile.name || "";
+  document.getElementById("profile-email").value = profile.email || "";
+  document.getElementById("profile-phone").value = profile.phone || "";
+  document.getElementById("profile-address").value = profile.address || "";
+  document.getElementById("profile-preferences").value = profile.preferences || "";
+}
+
+function showProfileStatus(message, error = false) {
+  profileStatus.textContent = message;
+  profileStatus.classList.toggle("scheduled-error", error);
+}
 
 document.querySelectorAll('input[name="run-mode"]').forEach((input) => {
   input.addEventListener("change", () => {

@@ -18,6 +18,8 @@ class UserProfile(BaseModel):
     name: str = ""
     email: str = ""
     phone: str = ""
+    address: str = ""
+    preferences: str = ""
 
 
 class TaskCreate(BaseModel):

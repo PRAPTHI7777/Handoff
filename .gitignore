@@ -9,6 +9,8 @@ __pycache__/
 *.webm
 data/memories.json
 data/memories.json.tmp
+data/profile.json
+data/profile.json.tmp
 data/scheduled_tasks.json
 data/scheduled_tasks.json.tmp
 .idea/
