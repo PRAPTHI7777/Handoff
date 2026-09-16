@@ -76,7 +76,7 @@ class Settings:
 
     browser_headless: bool = _bool(
         "BROWSER_HEADLESS",
-        True,
+        False,
     )
 
     max_steps: int = int(

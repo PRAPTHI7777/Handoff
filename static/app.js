@@ -352,6 +352,13 @@ function renderGate(event) {
     return;
   }
 
+  if (event.status === "needs_human") {
+    const instructions = document.createElement("p");
+    instructions.textContent =
+      "Complete the verification in the visible Handoff browser window, then continue here.";
+    gate.appendChild(instructions);
+  }
+
   title.textContent = payload.reason || "Handle the page, then continue.";
   const btn = document.createElement("button");
   btn.type = "button";
