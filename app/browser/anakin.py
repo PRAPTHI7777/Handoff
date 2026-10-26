@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Optional
 
 from playwright.async_api import Browser, Page, Playwright, TimeoutError as PlaywrightTimeout
@@ -69,8 +70,22 @@ class PlaywrightBrowserSession(BrowserSession):
         self.backend = "anakin"
 
     async def _launch_local(self) -> None:
-        logger.info("Launching local Chromium (headless=%s)", settings.browser_headless)
-        browser = await self._playwright.chromium.launch(headless=settings.browser_headless)
+        exec_path = settings.local_browser_executable
+        if settings.browser_mode == "local" and exec_path:
+            if not Path(exec_path).is_file():
+                raise FileNotFoundError(
+                    f"Configured local browser executable was not found: {exec_path}. "
+                    "Set LOCAL_BROWSER_EXECUTABLE to the path of an existing browser executable."
+                )
+            logger.info(
+                "Launching local browser at %s (headless=%s)", exec_path, settings.browser_headless
+            )
+            browser = await self._playwright.chromium.launch(
+                headless=settings.browser_headless, executable_path=exec_path
+            )
+        else:
+            logger.info("Launching local Chromium (headless=%s)", settings.browser_headless)
+            browser = await self._playwright.chromium.launch(headless=settings.browser_headless)
         page = await browser.new_page()
         self._browser = browser
         self._page = page

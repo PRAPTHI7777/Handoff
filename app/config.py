@@ -79,6 +79,13 @@ class Settings:
         False,
     )
 
+    # When running in local browser mode, prefer a user-provided browser
+    # executable. Default points to the typical Chrome install on Windows.
+    local_browser_executable: str = os.getenv(
+        "LOCAL_BROWSER_EXECUTABLE",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    ).strip()
+
     max_steps: int = int(
         os.getenv(
             "MAX_STEPS",
