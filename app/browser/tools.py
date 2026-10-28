@@ -61,6 +61,42 @@ async def dispatch_tool(
         return ToolResult(kind="observation", observation=obs)
 
 
+async def _press_key_requires_confirmation(session: BrowserSession, key: str) -> bool:
+    if key != "Enter":
+        return False
+
+    page = getattr(session, "_page", None)
+    if page is None:
+        return False
+
+    try:
+        label = await page.evaluate(
+            """
+            () => {
+              const active = document.activeElement;
+              if (!active) return null;
+              const form = active.form || active.closest?.('form');
+              if (!form || active.matches('textarea, [contenteditable="true"]')) return null;
+              if (active.matches('button[type="submit"], button:not([type]), input[type="submit"], input[type="image"]')) {
+                return active.getAttribute('aria-label') || active.value || active.textContent || form.innerText || form.textContent || '';
+              }
+              if (!active.matches('input') || !['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes(active.type)) return null;
+              const submitters = Array.from(form.elements).filter(el =>
+                !el.disabled && (el.matches('button') ? el.type === 'submit' : ['submit', 'image'].includes(el.type))
+              );
+              const labels = submitters.map(el => el.getAttribute('aria-label') || el.value || el.textContent || '').join(' ');
+              // Implicit Enter can submit via an unlabeled/default submitter.
+              return `${labels} ${form.innerText || form.textContent || ''}`;
+            }
+            """
+        )
+    except Exception:
+        # If the page cannot be inspected, do not send an unverified Enter.
+        return True
+
+    return is_consequential_label(str(label or ""))
+
+
 async def _dispatch_validated(
     session: BrowserSession,
     name: str,
@@ -106,6 +142,18 @@ async def _dispatch_validated(
 
     if name == "press_key":
         args = PressKeyArgs.model_validate(raw_args)
+        if not confirmed and await _press_key_requires_confirmation(session, args.key):
+            return ToolResult(
+                kind="pause",
+                pause_status=TaskStatus.needs_confirmation,
+                pause_payload={
+                    "summary": f"Press Enter to submit a consequential action on {session.current_url()}",
+                    "action": "submit",
+                    "ref": None,
+                    "pending_tool": "press_key",
+                    "pending_args": {"key": args.key},
+                },
+            )
         return ToolResult(kind="observation", observation=await session.press_key(args.key))
 
     if name == "ask_user":
