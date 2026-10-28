@@ -11,7 +11,8 @@ from uuid import uuid4
 
 SENSITIVE_RE = re.compile(
     r"\b(api[ _-]?key|secret|access[ _-]?token|password|passcode|"
-    r"one[ _-]?time[ _-]?password|\botp\b|cvv|credit[ _-]?card|ssn)\b",
+    r"one[ _-]?time[ _-]?password|\botp\b|cvv|credit[ _-]?card|ssn|"
+    r"gsk_[A-Za-z0-9_-]{20,})\b",
     re.IGNORECASE,
 )
 

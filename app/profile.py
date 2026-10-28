@@ -14,7 +14,7 @@ SENSITIVE_RE = re.compile(
     r"one[ _-]?time[ _-]?password|\botp\b|cvv|credit[ _-]?card|"
     r"debit[ _-]?card|card(?:[ _-]?number)?|payment|"
     r"auth(?:entication)?[ _-]?token|bearer[ _-]?token|"
-    r"ssn|security[ _-]?code)\b",
+    r"ssn|security[ _-]?code|gsk_[A-Za-z0-9_-]{20,})\b",
     re.IGNORECASE,
 )
 
@@ -41,6 +41,10 @@ class ProfileStore:
         values = raw.get("profile") if isinstance(raw, dict) else None
         if not isinstance(values, dict):
             raise ProfileStoreError("Local profile store has an invalid format")
+        values = {
+            key: "" if isinstance(value, str) and SENSITIVE_RE.search(value) else value
+            for key, value in values.items()
+        }
         try:
             return UserProfile.model_validate(values)
         except (TypeError, ValueError) as exc:

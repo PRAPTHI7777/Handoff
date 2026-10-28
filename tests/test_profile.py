@@ -32,6 +32,38 @@ class ProfileStoreTests(unittest.TestCase):
                 UserProfile(preferences="my password is secret")
             )
 
+    def test_opaque_api_key_shaped_profile_value_is_rejected(self) -> None:
+        with self.assertRaises(ProfileStoreError):
+            ProfileStore(self.path).save(
+                UserProfile(preferences="gsk_test_DUMMY_0123456789abcdef")
+            )
+
+    def test_legacy_sensitive_value_is_filtered_without_rewriting_file(self) -> None:
+        self.path.write_text(
+            json.dumps(
+                {
+                    "profile": {
+                        "name": "Ada",
+                        "email": "ada@example.com",
+                        "phone": "555-0100",
+                        "address": "1 Example Street",
+                        "preferences": "gsk_test_DUMMY_0123456789abcdef",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        original_contents = self.path.read_bytes()
+
+        loaded = ProfileStore(self.path).load()
+
+        self.assertEqual(loaded.name, "Ada")
+        self.assertEqual(loaded.email, "ada@example.com")
+        self.assertEqual(loaded.phone, "555-0100")
+        self.assertEqual(loaded.address, "1 Example Street")
+        self.assertEqual(loaded.preferences, "")
+        self.assertEqual(self.path.read_bytes(), original_contents)
+
     def test_missing_profile_is_empty(self) -> None:
         self.assertEqual(ProfileStore(self.path).load(), UserProfile())
 
