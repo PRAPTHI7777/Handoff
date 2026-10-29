@@ -166,6 +166,9 @@ class TaskManager:
                 f"(status={task.status.value})"
             )
 
+        if task.status == TaskStatus.needs_human and payload.human_done is not True:
+            raise RuntimeError("Human handoff must be confirmed before resuming")
+
         task.resume_payload = payload
         task.resume_event.set()
 
