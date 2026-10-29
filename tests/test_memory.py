@@ -17,6 +17,11 @@ class MemoryStoreTests(unittest.TestCase):
         with self.assertRaises(MemoryStoreError):
             MemoryStore(self.path).save("gsk_test_DUMMY_0123456789abcdef")
 
+    def test_sk_opaque_api_key_shaped_memory_is_rejected(self) -> None:
+        with self.assertRaises(MemoryStoreError):
+            MemoryStore(self.path).save("sk_test_DUMMY_0123456789abcdef")
+
     def test_ordinary_preference_memory_is_saved(self) -> None:
-        saved = MemoryStore(self.path).save("Prefers concise answers")
-        self.assertEqual(saved["value"], "Prefers concise answers")
+        preference = "Prefers concise answers; document the sk_ marker"
+        saved = MemoryStore(self.path).save(preference)
+        self.assertEqual(saved["value"], preference)

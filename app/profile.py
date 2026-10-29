@@ -14,7 +14,7 @@ SENSITIVE_RE = re.compile(
     r"one[ _-]?time[ _-]?password|\botp\b|cvv|credit[ _-]?card|"
     r"debit[ _-]?card|card(?:[ _-]?number)?|payment|"
     r"auth(?:entication)?[ _-]?token|bearer[ _-]?token|"
-    r"ssn|security[ _-]?code|gsk_[A-Za-z0-9_-]{20,})\b",
+    r"ssn|security[ _-]?code|gsk_[A-Za-z0-9_-]{20,}|sk_[A-Za-z0-9_-]{20,})\b",
     re.IGNORECASE,
 )
 
