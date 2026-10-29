@@ -58,12 +58,26 @@ class PlaywrightBrowserSession(BrowserSession):
         if not settings.anakin_api_key:
             raise RuntimeError("ANAKIN_API_KEY is required for Anakin browser mode")
         logger.info("Connecting to Anakin Browser API via CDP")
-        browser = await self._playwright.chromium.connect_over_cdp(
-            settings.anakin_cdp_url,
-            headers={"X-API-Key": settings.anakin_api_key},
-        )
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
-        page = context.pages[0] if context.pages else await context.new_page()
+        browser = None
+        context = None
+        owns_context = False
+        try:
+            browser = await self._playwright.chromium.connect_over_cdp(
+                settings.anakin_cdp_url,
+                headers={"X-API-Key": settings.anakin_api_key},
+            )
+            if browser.contexts:
+                context = browser.contexts[0]
+            else:
+                context = await browser.new_context()
+                owns_context = True
+            page = context.pages[0] if context.pages else await context.new_page()
+        except BaseException:
+            if owns_context:
+                await _close_startup_resource(context, "browser context")
+            await _close_startup_resource(browser, "browser connection")
+            raise
+
         self._browser = browser
         self._page = page
         self._using_anakin = True
@@ -86,7 +100,11 @@ class PlaywrightBrowserSession(BrowserSession):
         else:
             logger.info("Launching local Chromium (headless=%s)", settings.browser_headless)
             browser = await self._playwright.chromium.launch(headless=settings.browser_headless)
-        page = await browser.new_page()
+        try:
+            page = await browser.new_page()
+        except BaseException:
+            await _close_startup_resource(browser, "local browser")
+            raise
         self._browser = browser
         self._page = page
         self._using_anakin = False
@@ -229,3 +247,12 @@ async def create_browser_session(playwright: Playwright) -> BrowserSession:
     session = PlaywrightBrowserSession(playwright)
     await session.start()
     return session
+
+
+async def _close_startup_resource(resource, description: str) -> None:
+    if resource is None:
+        return
+    try:
+        await resource.close()
+    except BaseException:
+        logger.exception("Failed to close %s after browser startup failed", description)
