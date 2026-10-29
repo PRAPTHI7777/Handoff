@@ -36,6 +36,22 @@ class FakeManager:
         return FakeAgentTask(self.agent_status, self.error)
 
 
+class StartupFailureManager(FakeManager):
+    async def start_task(self, spec) -> FakeAgentTask:
+        self.started.append(spec)
+        if spec.goal == "controlled startup failure":
+            raise ValueError("controlled startup failure")
+        return FakeAgentTask(TaskStatus.completed)
+
+
+class CancelOnceManager(FakeManager):
+    async def start_task(self, spec) -> FakeAgentTask:
+        self.started.append(spec)
+        if len(self.started) == 1:
+            raise asyncio.CancelledError
+        return FakeAgentTask(TaskStatus.completed)
+
+
 def scheduled_task(
     run_at: datetime,
     recurrence: RecurrenceKind = RecurrenceKind.none,
@@ -197,6 +213,118 @@ class SchedulerPersistenceTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertEqual(len(manager.started), 1)
         self.assertEqual(scheduler.tasks[task.id].next_run_at, datetime(2020, 2, 29, 22, 30, tzinfo=timezone.utc))
+
+    async def test_unexpected_startup_failure_is_persisted_and_other_due_task_runs(self) -> None:
+        manager = StartupFailureManager()
+        scheduler = Scheduler(manager, self.path)
+        failed = scheduler.schedule(self.make_spec())
+        failed.goal = "controlled startup failure"
+        continued = scheduler.schedule(self.make_spec())
+        continued.goal = "continue processing"
+        due_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        failed.next_run_at = due_time
+        continued.next_run_at = due_time
+        scheduler._save()
+
+        await scheduler.start()
+        try:
+            deadline = asyncio.get_running_loop().time() + 5
+            while (
+                scheduler.tasks[failed.id].status != ScheduledTaskStatus.failed
+                or scheduler.tasks[continued.id].status != ScheduledTaskStatus.completed
+            ):
+                if asyncio.get_running_loop().time() >= deadline:
+                    self.fail(
+                        "Scheduler did not finish both startup attempts: "
+                        f"failed={scheduler.tasks[failed.id].status}, "
+                        f"continued={scheduler.tasks[continued.id].status}"
+                    )
+                await asyncio.sleep(0.01)
+
+            failed = scheduler.tasks[failed.id]
+            continued = scheduler.tasks[continued.id]
+            persisted = {
+                item["id"]: item
+                for item in json.loads(self.path.read_text(encoding="utf-8"))["scheduled_tasks"]
+            }
+            self.assertEqual(failed.error, "controlled startup failure")
+            self.assertEqual(persisted[failed.id]["status"], "failed")
+            self.assertEqual(persisted[continued.id]["status"], "completed")
+            self.assertEqual(len(manager.started), 2)
+            self.assertIsNotNone(scheduler._runner)
+            self.assertFalse(scheduler._runner.done())
+        finally:
+            await scheduler.stop()
+
+    async def test_start_restarts_completed_runner_and_recovers_running_task(self) -> None:
+        manager = FakeManager()
+        scheduler = Scheduler(manager, self.path)
+        task = scheduled_task(datetime(2020, 1, 1, tzinfo=timezone.utc))
+        task.task_id = "stale-agent-id"
+        scheduler.tasks[task.id] = task
+        scheduler._save()
+
+        async def finished_runner() -> None:
+            return None
+
+        previous_runner = asyncio.create_task(finished_runner())
+        await previous_runner
+        scheduler._runner = previous_runner
+
+        await scheduler.start()
+        try:
+            deadline = asyncio.get_running_loop().time() + 5
+            while scheduler.tasks[task.id].status != ScheduledTaskStatus.completed:
+                if asyncio.get_running_loop().time() >= deadline:
+                    self.fail(
+                        "Recovered task did not complete: "
+                        f"status={scheduler.tasks[task.id].status}"
+                    )
+                await asyncio.sleep(0.01)
+
+            task = scheduler.tasks[task.id]
+            self.assertIsNot(scheduler._runner, previous_runner)
+            self.assertEqual(len(manager.started), 1)
+            persisted = json.loads(self.path.read_text(encoding="utf-8"))["scheduled_tasks"][0]
+            self.assertEqual(persisted["status"], "completed")
+        finally:
+            await scheduler.stop()
+
+    async def test_cancelled_runner_propagates_and_restart_recovers_running_task(self) -> None:
+        manager = CancelOnceManager()
+        scheduler = Scheduler(manager, self.path)
+        task = scheduler.schedule(self.make_spec())
+        task.next_run_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        scheduler._save()
+
+        await scheduler.start()
+        try:
+            runner = scheduler._runner
+            deadline = asyncio.get_running_loop().time() + 5
+            while not runner.done():
+                if asyncio.get_running_loop().time() >= deadline:
+                    self.fail("Cancelled startup did not cancel the scheduler runner")
+                await asyncio.sleep(0.01)
+
+            self.assertTrue(runner.cancelled())
+            persisted = json.loads(self.path.read_text(encoding="utf-8"))["scheduled_tasks"][0]
+            self.assertEqual(persisted["status"], "running")
+
+            await scheduler.start()
+            deadline = asyncio.get_running_loop().time() + 5
+            while scheduler.tasks[task.id].status != ScheduledTaskStatus.completed:
+                if asyncio.get_running_loop().time() >= deadline:
+                    self.fail(
+                        "Restart did not recover the cancelled task: "
+                        f"status={scheduler.tasks[task.id].status}"
+                    )
+                await asyncio.sleep(0.01)
+
+            self.assertEqual(len(manager.started), 2)
+            persisted = json.loads(self.path.read_text(encoding="utf-8"))["scheduled_tasks"][0]
+            self.assertEqual(persisted["status"], "completed")
+        finally:
+            await scheduler.stop()
 
     def test_stale_running_schedule_is_recovered(self) -> None:
         scheduler = Scheduler(FakeManager(), self.path)

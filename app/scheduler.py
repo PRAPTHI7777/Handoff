@@ -42,13 +42,36 @@ class Scheduler:
 
     async def start(self) -> None:
         if self._runner is not None:
-            return
+            if not self._runner.done():
+                return
+            previous_runner = self._runner
+            self._runner = None
+            if not previous_runner.cancelled():
+                error = previous_runner.exception()
+                if error is not None:
+                    logger.error(
+                        "Scheduler runner stopped unexpectedly",
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
+            self._recover_running_tasks()
         self.load()
         self._stop.clear()
         self._runner = asyncio.create_task(
             self._run(),
             name="handoff-scheduler",
         )
+
+    def _recover_running_tasks(self) -> None:
+        with self._lock:
+            recovered = False
+            for scheduled in self.tasks.values():
+                if scheduled.status == ScheduledTaskStatus.running:
+                    scheduled.status = ScheduledTaskStatus.scheduled
+                    scheduled.task_id = None
+                    self._retry_at.pop(scheduled.id, None)
+                    recovered = True
+            if recovered:
+                self._save_locked()
 
     async def stop(self) -> None:
         self._stop.set()
@@ -231,8 +254,13 @@ class Scheduler:
                         profile=scheduled.profile,
                     )
                 )
-            except RuntimeError as exc:
-                if "already active" not in str(exc):
+            except Exception as exc:
+                if not isinstance(exc, RuntimeError) or "already active" not in str(exc):
+                    if not isinstance(exc, RuntimeError):
+                        logger.exception(
+                            "Unexpected error starting scheduled task %s",
+                            scheduled.id,
+                        )
                     if scheduled.recurrence == RecurrenceKind.none:
                         with self._lock:
                             scheduled.status = ScheduledTaskStatus.failed
